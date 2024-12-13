@@ -1,4 +1,5 @@
 import dotenv from 'dotenv'
+import { SimpleLimiter } from './limiter.js'
 // 加载环境变量
 dotenv.config()
 const env = dotenv.config().parsed // 环境参数
@@ -14,6 +15,19 @@ const aliasWhiteList = env.ALIAS_WHITELIST ? env.ALIAS_WHITELIST.split(',') : []
 
 // 从环境变量中导入群聊白名单
 const roomWhiteList = env.ROOM_WHITELIST ? env.ROOM_WHITELIST.split(',') : []
+
+const CHAT_LIMIT_PRE_USER = env.CHAT_LIMIT_PRE_USER || 2
+const CHAT_LIMIT_PER_GROUP = env.CHAT_LIMIT_PER_GROUP || 5
+const CHAT_LIMIT_4_ALL = env.CHAT_LIMIT_4_ALL || 10
+const usrLimiter = new SimpleLimiter(CHAT_LIMIT_PRE_USER, 60000)
+const groupLimiter = new SimpleLimiter(CHAT_LIMIT_PER_GROUP, 60000)
+const globalLimiter = new SimpleLimiter(CHAT_LIMIT_4_ALL, 60000)
+const overloadReply = env.OVERLOAD_REPLY || '说话太快了我现在猪脑过载忙不过来啦，待会再找我哦'
+setInterval(function () {
+  usrLimiter.cleanup()
+  groupLimiter.cleanup()
+  globalLimiter.cleanup()
+}, 60000)
 
 import { getServe } from './serve.js'
 
@@ -44,18 +58,26 @@ export async function defaultMessage(msg, bot, ServiceType = 'GPT') {
     // 区分群聊和私聊
     // 群聊消息去掉艾特主体后，匹配自动回复前缀
     if (isRoom && room && content.replace(`${botName}`, '').trimStart().startsWith(`${autoReplyPrefix}`)) {
-      const question = (await msg.mentionText()) || content.replace(`${botName}`, '').replace(`${autoReplyPrefix}`, '') // 去掉艾特的消息主体
-      console.log('🌸🌸🌸 / question: ', question)
-      const response = await getReply(question)
-      await room.say(response)
+      if (!globalLimiter.canAccess('CHAT') || !groupLimiter.canAccess(roomName) || !usrLimiter.canAccess(alias)) {
+        await room.say(overloadReply)
+      } else {
+        const question = (await msg.mentionText()) || content.replace(`${botName}`, '').replace(`${autoReplyPrefix}`, '') // 去掉艾特的消息主体
+        console.log('🌸🌸🌸 / question: ', question)
+        const response = await getReply(question)
+        await room.say(response)
+      }
     }
     // 私人聊天，白名单内的直接发送
     // 私人聊天直接匹配自动回复前缀
     if (isAlias && !room && content.trimStart().startsWith(`${autoReplyPrefix}`)) {
-      const question = content.replace(`${autoReplyPrefix}`, '')
-      console.log('🌸🌸🌸 / content: ', question)
-      const response = await getReply(question)
-      await contact.say(response)
+      if (!globalLimiter.canAccess('CHAT') || !usrLimiter.canAccess(alias)) {
+        await room.say('你慢点说')
+      } else {
+        const question = content.replace(`${autoReplyPrefix}`, '')
+        console.log('🌸🌸🌸 / content: ', question)
+        const response = await getReply(question)
+        await contact.say(response)
+      }
     }
   } catch (e) {
     console.error(e)
